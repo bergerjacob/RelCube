@@ -1,4 +1,4 @@
-## RELCube Architecture
+## RelCube Architecture
 
 ### 1. Encoding
 **Target:** Physical state extraction into discrete integers.

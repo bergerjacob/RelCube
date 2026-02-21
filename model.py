@@ -159,8 +159,8 @@ class PolicyHead(nn.Module):
         return x
 
 
-class RELCube(nn.Module):
-    """Main RELCube model for Rubik's Cube state evaluation."""
+class RelCube(nn.Module):
+    """Main RelCube model for Rubik's Cube state evaluation."""
     
     def __init__(self, encoder=None):
         super().__init__()
