@@ -1,3 +1,8 @@
+
+###################################################################################################################
+# NOTE: I am not sure this is working it needs to be tested independantly, the other encoding utility def does work
+###################################################################################################################
+
 #!/usr/bin/env python3
 """
 Rubik's Cube Move to Piece-Based Encoding Converter

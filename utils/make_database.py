@@ -1,43 +1,56 @@
-# run with : python make_database.py
-
 import numpy as np
-from cube_converter import apply_move, get_piece_encoding, SOLVED_STATE, parse_moves
+import argparse
+import sys
+from cube_encoding import get_piece_encoding_from_moves
 
-# Define our 6 states
-scramble_list = [
-    "R U R' U'",                             # 1. Easy
-    "D L2 B F' R' U2",                       # 2. Easy
-    "F2 U' L R' D2 B2 L' R U'",               # 3. Medium scramble
-    "L B R U' D' L' B' D2 F R2",             # 4. Hard scramble
-    "R2 L2 U2 D2 F2 B2",                     # 5. Checkerboard pattern
-    "U U U U"                                # 6. solved state 
-]
+def run_encoding(output_path):
+    # Define our 6 states
+    scramble_list = [
+        "R U R' U'",                             # 1. Easy
+        "D L2 B F' R' U2",                       # 2. Easy
+        "F2 U' L R' D2 B2 L' R U'",               # 3. Medium scramble
+        "L B R U' D' L' B' D2 F R2",             # 4. Hard scramble
+        "R2 L2 U2 D2 F2 B2",                     # 5. Checkerboard pattern
+        "U U U U"                                 # 6. solved state 
+    ]
 
-all_slots = []
-all_pieces = []
-all_orients = []
+    all_slots = []
+    all_pieces = []
+    all_orients = []
 
-print(f"Encoding {len(scramble_list)} states...")
+    print(f"Encoding {len(scramble_list)} states...")
 
-for i, moves_str in enumerate(scramble_list):
-    # Start from solved and apply moves
-    state = SOLVED_STATE
-    for m in parse_moves(moves_str):
-        state = apply_move(state, m)
+    for i, moves_str in enumerate(scramble_list):
+        try:
+            slots, pieces, orients = get_piece_encoding_from_moves(moves_str)
+            all_slots.append(slots)
+            all_pieces.append(pieces)
+            all_orients.append(orients)
+            print(f"State {i+1} done: {moves_str[:20]}...")
+        except Exception as e:
+            print(f"Error processing state {i+1}: {e}")
+            sys.exit(1)
+
+    # Save logic
+    if not output_path.endswith('.npz'):
+        output_path += '.npz'
+
+    np.savez(output_path, 
+             slots=np.array(all_slots), 
+             pieces=np.array(all_pieces), 
+             orientations=np.array(all_orients))
+
+    print(f"\nSuccess! '{output_path}' created.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Encode Rubik's Cube states.")
     
-    # Encode to piece-based tensors
-    s, p, o = get_piece_encoding(state)
+    # Adding the --output flag and making it mandatory
+    parser.add_argument("--output", 
+                        required=True, 
+                        help="The path/name for the output .npz file")
     
-    all_slots.append(s)
-    all_pieces.append(p)
-    all_orients.append(o)
+    args = parser.parse_args()
     
-    print(f"State {i+1} done: {moves_str[:20]}...")
-
-# Save all 6 states into one file
-np.savez('cube_dataset_6.npz', 
-         slots=np.array(all_slots), 
-         pieces=np.array(all_pieces), 
-         orientations=np.array(all_orients))
-
-print("\nSuccess! 'cube_dataset_6.npz' created.")
+    # Run the program
+    run_encoding(args.output)
