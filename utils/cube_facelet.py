@@ -68,8 +68,7 @@ def get_piece_map():
 
 PIECE_ID_MAP = get_piece_map()
 
-def get_piece_encoding(state: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    slots = np.arange(20, dtype=np.int32)
+def get_piece_encoding(state: str) -> Tuple[np.ndarray, np.ndarray]:
     pieces = np.zeros(20, dtype=np.int32)
     orientations = np.zeros(20, dtype=np.int32)
     all_slots = CORNERS + EDGES
@@ -87,7 +86,7 @@ def get_piece_encoding(state: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
             if sticker in primary:
                 orientations[i] = orient
                 break
-    return slots, pieces, orientations
+    return pieces, orientations
 
 def rotate_face(state: str, face: str, times: int = 1) -> str:
     start = FACE_START[face]
@@ -150,12 +149,12 @@ def main():
             state = apply_move(state, m)
         
         if args.piece or args.save:
-            s, p, o = get_piece_encoding(state)
+            p, o = get_piece_encoding(state)
             if args.save:
-                np.savez(args.save, slots=s, pieces=p, orientations=o)
+                np.savez(args.save, pieces=p, orientations=o)
                 print(f"Saved to {args.save}")
             else:
-                print(f"Slots:  {s}\nPieces: {p}\nOrients:{o}")
+                print(f"Pieces: {p}\nOrients:{o}")
         else:
             print(state)
     except Exception as e:

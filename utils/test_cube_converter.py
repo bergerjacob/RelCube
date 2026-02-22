@@ -10,7 +10,7 @@ class TestCubeConverter(unittest.TestCase):
         """Helper to print details and assert the actual state matches expectations."""
         
         # 1. Run the black box function
-        slots, actual_pieces, actual_orients = get_piece_encoding_from_moves(moves_str)
+        actual_pieces, actual_orients = get_piece_encoding_from_moves(moves_str)
         
         # 2. Print exactly what it did, what it expected, and what it was
         print(f"\n{'='*65}")

@@ -3,20 +3,19 @@ import torch.nn as nn
 
 
 class CubeEncoder(nn.Module):
-    """Encoding layer that extracts piece ID, slot ID, and orientation."""
+    """Encoding layer that extracts piece ID and orientation."""
     
     def __init__(self):
         super().__init__()
     
     def forward(self, raw_state):
         """
-        Extract piece ID, slot ID, and orientation from raw cube state.
+        Extract piece ID and orientation from raw cube state.
         
         Args:
             raw_state: Raw representation of 3x3 Rubik's Cube
             
         Returns:
-            slot_ids: (Batch_Size, 20) - Values 0-19
             piece_ids: (Batch_Size, 20) - Values 0-19
             orientations: (Batch_Size, 20) - Values 0-2 (corners) or 0-1 (edges)
         """
@@ -39,31 +38,29 @@ class EmbeddingLayer(nn.Module):
         
         self.proj = nn.Linear(128, 256)
     
-    def forward(self, slot_ids, piece_ids, orientations):
+    def forward(self, piece_ids, orientations):
         """
         Args:
-            slot_ids: (Batch_Size, 20) - Slot IDs 0-19
             piece_ids: (Batch_Size, 20) - Piece IDs 0-19
             orientations: (Batch_Size, 20) - Orientations
             
         Returns:
             (Batch_Size, 20, 256) - Embedded tokens
         """
-        batch_size = slot_ids.size(0)
+        batch_size = piece_ids.size(0)
+        device = piece_ids.device
         
         corner_slice = 8
         edge_slice = 12
         
-        corner_indices = torch.arange(corner_slice, device=slot_ids.device)
-        edge_indices = torch.arange(corner_slice, corner_slice + edge_slice, device=slot_ids.device)
+        corner_slot_ids = torch.arange(corner_slice, device=device).expand(batch_size, corner_slice)
+        edge_slot_ids = torch.arange(edge_slice, device=device).expand(batch_size, edge_slice)
         
-        corner_slot_ids = slot_ids.index_select(1, corner_indices)
-        corner_piece_ids = piece_ids.index_select(1, corner_indices)
-        corner_orientations = orientations.index_select(1, corner_indices)
+        corner_piece_ids = piece_ids[:, :corner_slice]
+        corner_orientations = orientations[:, :corner_slice]
         
-        edge_slot_ids = slot_ids.index_select(1, edge_indices)
-        edge_piece_ids = piece_ids.index_select(1, edge_indices)
-        edge_orientations = orientations.index_select(1, edge_indices)
+        edge_piece_ids = piece_ids[:, corner_slice:] - corner_slice
+        edge_orientations = orientations[:, corner_slice:]
         
         corner_emb_slot = self.corner_slot_emb(corner_slot_ids)
         corner_emb_piece = self.corner_piece_emb(corner_piece_ids)
@@ -182,8 +179,8 @@ class RelCube(nn.Module):
             value: (Batch_Size, 1) - Expected moves to solved
             policy: (Batch_Size, 12) - Move probabilities
         """
-        slot_ids, piece_ids, orientations = self.encoder(raw_state)
-        embedded = self.embedding(slot_ids, piece_ids, orientations)
+        piece_ids, orientations = self.encoder(raw_state)
+        embedded = self.embedding(piece_ids, orientations)
         transformed = self.transformer(embedded)
         
         value = self.value_head(transformed)

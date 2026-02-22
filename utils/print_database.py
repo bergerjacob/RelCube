@@ -15,20 +15,17 @@ def print_database(input_path):
 
     # Header for the table
     print(f"\nDatabase: {input_path}")
-    print("Solved slot reference: " + " ".join(f"{i:<3}" for i in range(20)))
-    print("-" * 130) # Adjusted width for readability
+    print("-" * 90)
 
-    # Get the number of states in the file
     num_states = d['pieces'].shape[0]
 
     print(f"{'Idx':<4} | {'Status':<10} | {'Pieces':<60} | {'Orients'}")
-    print("-" * 130)
+    print("-" * 90)
 
     for i in range(num_states):
         pieces = d['pieces'][i]
         orients = d['orientations'][i]
         
-        # Check if the pieces are in their original positions (0-19)
         is_solved = np.array_equal(pieces, np.arange(20))
         status = "Solved" if is_solved else "Scrambled"
         

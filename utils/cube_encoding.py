@@ -33,7 +33,7 @@ ADJUST = {
 }
 
 
-def get_piece_encoding_from_moves(moves_str: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def get_piece_encoding_from_moves(moves_str: str) -> Tuple[np.ndarray, np.ndarray]:
     """Generate piece encoding after applying moves from solved state."""
     pieces = np.arange(20, dtype=np.int32)
     orientations = np.zeros(20, dtype=np.int32)
@@ -43,8 +43,7 @@ def get_piece_encoding_from_moves(moves_str: str) -> Tuple[np.ndarray, np.ndarra
     for move in move_list:
         apply_move_to_encoding(move, pieces, orientations)
     
-    slots = np.arange(20, dtype=np.int32)
-    return slots, pieces, orientations
+    return pieces, orientations
 
 
 def parse_moves(moves_str: str) -> List[str]:
@@ -117,13 +116,12 @@ def main():
     args = parser.parse_args()
     
     try:
-        slots, pieces, orientations = get_piece_encoding_from_moves(args.moves)
+        pieces, orientations = get_piece_encoding_from_moves(args.moves)
         
         if args.save:
-            np.savez(args.save, slots=slots, pieces=pieces, orientations=orientations)
+            np.savez(args.save, pieces=pieces, orientations=orientations)
             print(f"Saved to {args.save}")
         else:
-            print(f"Slots:  {slots}")
             print(f"Pieces: {pieces}")
             print(f"Orients: {orientations}")
             
@@ -132,7 +130,7 @@ def main():
                 for i in range(20):
                     p = pieces[i]
                     o = orientations[i]
-                    print(f"Slot {i:2d} -> Piece {p:2d}, orient={o}")
+                    print(f"Piece {p:2d} at slot {i:2d}, orient={o}")
                     
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

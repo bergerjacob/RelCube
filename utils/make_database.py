@@ -14,7 +14,6 @@ def run_encoding(output_path):
         "U U U U"                                 # 6. solved state 
     ]
 
-    all_slots = []
     all_pieces = []
     all_orients = []
 
@@ -22,8 +21,7 @@ def run_encoding(output_path):
 
     for i, moves_str in enumerate(scramble_list):
         try:
-            slots, pieces, orients = get_piece_encoding_from_moves(moves_str)
-            all_slots.append(slots)
+            pieces, orients = get_piece_encoding_from_moves(moves_str)
             all_pieces.append(pieces)
             all_orients.append(orients)
             print(f"State {i+1} done: {moves_str[:20]}...")
@@ -36,7 +34,6 @@ def run_encoding(output_path):
         output_path += '.npz'
 
     np.savez(output_path, 
-             slots=np.array(all_slots), 
              pieces=np.array(all_pieces), 
              orientations=np.array(all_orients))
 
