@@ -37,6 +37,8 @@
 * **Layer 1: Linear Projection**
     * `Linear(128 -> 256)` to map to the Transformer's hidden dimension.
     * **Shape:** `(Batch_Size, 20, 256)`
+    * > **Architecture Note: Learned Positional Fusion**
+      > In standard Transformer architectures (*Attention Is All You Need*), positional encodings are often added to token embeddings. In RelCube, the `Slot ID` functions as our positional encoding, while the `Piece ID` and `Orientation` act as the semantic token. Rather than adding them, we concatenate these embeddings and use this `Linear(128 -> 256)` layer to mix them.
 * **Output:** Continuous, context-free sequence of 20 piece tokens.
 
 ---
