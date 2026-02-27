@@ -11,15 +11,17 @@ class CubeEncoder(nn.Module):
     def forward(self, raw_state):
         """
         Extract piece ID and orientation from raw cube state.
-        
+
         Args:
-            raw_state: Raw representation of 3x3 Rubik's Cube
-            
+            raw_state: (Batch_Size, 2, 20) - [0] = piece IDs, [1] = orientations
+
         Returns:
             piece_ids: (Batch_Size, 20) - Values 0-19
             orientations: (Batch_Size, 20) - Values 0-2 (corners) or 0-1 (edges)
         """
-        raise NotImplementedError("Subclasses must implement encoding logic")
+        piece_ids = raw_state[:, 0, :]
+        orientations = raw_state[:, 1, :]
+        return piece_ids, orientations
 
 
 class EmbeddingLayer(nn.Module):

@@ -12,10 +12,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
-from model import EmbeddingLayer, TransformerBlocks, ValueHead
-from utils.cube_encoding import (
-    MOVE_INFO, ADJUST, apply_move_to_encoding
-)
+from model import RelCube
+from utils.cube_encoding import apply_move_to_encoding
 
 
 # All 12 quarter-turn moves
@@ -25,20 +23,10 @@ SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
 
 
-class RelCubeValueNet(nn.Module):
-    """RelCube model that takes (piece_ids, orientations) directly."""
-
-    def __init__(self):
-        super().__init__()
-        self.embedding = EmbeddingLayer()
-        self.transformer = TransformerBlocks()
-        self.value_head = ValueHead()
-
-    def forward(self, piece_ids, orientations):
-        embedded = self.embedding(piece_ids, orientations)
-        transformed = self.transformer(embedded)
-        value = self.value_head(transformed)
-        return value.squeeze(-1)
+def pack_raw_state(edges, orients, device):
+    """Pack numpy pieces/orients into a (N, 2, 20) raw_state tensor."""
+    raw = np.stack([edges, orients], axis=1)  # (N, 2, 20)
+    return torch.from_numpy(raw).long().to(device)
 
 
 def is_solved(pieces, orientations):
@@ -126,7 +114,7 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    model = RelCubeValueNet().to(device)
+    model = RelCube().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     loss_fn = nn.MSELoss()
 
@@ -152,8 +140,8 @@ def train():
         (20, 800),
     ]
 
-    batch_size = 10000
-    inference_batch = 60000  # sub-batch for neighbor forward passes
+    batch_size = 1000
+    inference_batch = 6000  # sub-batch for neighbor forward passes
 
     print(f"\nBatch size: {batch_size}")
     print(f"Neighbors per batch: {batch_size * 12:,}")
@@ -182,9 +170,9 @@ def train():
 
                 for start in range(0, n_total, inference_batch):
                     end = min(start + inference_batch, n_total)
-                    p_t = torch.from_numpy(nbr_p[start:end]).long().to(device)
-                    o_t = torch.from_numpy(nbr_o[start:end]).long().to(device)
-                    nbr_vals[start:end] = model(p_t, o_t).cpu()
+                    raw = pack_raw_state(nbr_p[start:end], nbr_o[start:end], device)
+                    value, _ = model(raw)
+                    nbr_vals[start:end] = value.squeeze(-1).cpu()
 
                 # Reshape to (N, 12)
                 nbr_vals = nbr_vals.view(batch_size, 12)
@@ -193,11 +181,11 @@ def train():
             labels = compute_labels(pieces, orients, nbr_vals)
             labels_t = torch.from_numpy(labels).float().to(device)
 
-            # 5. Training pass on 10k states
+            # 5. Training pass
             model.train()
-            p_t = torch.from_numpy(pieces).long().to(device)
-            o_t = torch.from_numpy(orients).long().to(device)
-            preds = model(p_t, o_t)
+            raw = pack_raw_state(pieces, orients, device)
+            value, _ = model(raw)
+            preds = value.squeeze(-1)
 
             loss = loss_fn(preds, labels_t)
             optimizer.zero_grad()
