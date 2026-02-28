@@ -16,6 +16,13 @@ ALL_MOVES = ["U", "U'", "D", "D'", "R", "R'", "L", "L'", "F", "F'", "B", "B'"]
 CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
 MILESTONE_INTERVAL = 10
 
+# --- Training Hyperparameters ---
+LEARNING_RATE = 1e-4
+BATCH_SIZE = 10000
+BUFFER_SIZE = 1000000
+INFERENCE_BATCH_SIZE = 120000
+MAX_DEPTH = 40  # Used for buffer generation
+
 SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
 
@@ -176,24 +183,32 @@ def load_checkpoint(model, target_model, optimizer, checkpoint_path):
 #     print("--------------------\n")
 
 
-def train():
+def train(use_wandb=False):
+    if use_wandb:
+        if "WANDB_PROJECT" not in os.environ:
+            raise ValueError("Please set your project first! Run: export WANDB_PROJECT='relcube'")
+            
+        import wandb
+        wandb.init(config={
+            "learning_rate": LEARNING_RATE,
+            "batch_size": BATCH_SIZE,
+            "buffer_size": BUFFER_SIZE,
+            "inference_batch_size": INFERENCE_BATCH_SIZE,
+            "max_depth": MAX_DEPTH
+        })
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     model = RelCube().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     loss_fn = nn.MSELoss()
 
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {param_count:,}")
 
-    batch_size = 10000
-    buffer_size = 1000000
-    inference_batch = 120000
-
-    print(f"\nBatch size: {batch_size}")
-    print(f"Buffer size: {buffer_size:,}")
-    print(f"Neighbors per batch: {batch_size * 12:,}\n")
+    print(f"\nBatch size: {BATCH_SIZE}")
+    print(f"Buffer size: {BUFFER_SIZE:,}")
+    print(f"Neighbors per batch: {BATCH_SIZE * 12:,}\n")
 
     buffer_pieces = None
     buffer_orients = None
@@ -220,12 +235,12 @@ def train():
         print(f"Epoch {epoch}: Generating buffer...")
         gen_start = time.time()
         
-        num_puzzles = buffer_size // 40
+        num_puzzles = BUFFER_SIZE // MAX_DEPTH
         all_pieces = []
         all_orients = []
         all_depths = []
         
-        for cycle in range(max(1, buffer_size // (num_puzzles * 40))):
+        for cycle in range(max(1, BUFFER_SIZE // (num_puzzles * MAX_DEPTH))):
             pieces_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
             orients_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
             
@@ -233,7 +248,7 @@ def train():
                 pieces_batch[i] = SOLVED_PIECES.copy()
                 orients_batch[i] = SOLVED_ORIENTS.copy()
             
-            for depth in range(1, 41):
+            for depth in range(1, MAX_DEPTH + 1):
                 for i in range(num_puzzles):
                     p = pieces_batch[i].copy()
                     o = orients_batch[i].copy()
@@ -253,7 +268,7 @@ def train():
         print(f"  Buffer generated in {gen_time:.1f}s with {len(buffer_pieces):,} states")
         
         indices = np.random.permutation(len(buffer_pieces))
-        num_batches = len(indices) // batch_size
+        num_batches = len(indices) // BATCH_SIZE
         print(f"  {num_batches} batches per epoch\n")
         
         batch_start = time.time()
@@ -261,8 +276,8 @@ def train():
         for batch_idx in range(num_batches):
             t0 = time.time()
             
-            start_idx = batch_idx * batch_size
-            end_idx = start_idx + batch_size
+            start_idx = batch_idx * BATCH_SIZE
+            end_idx = start_idx + BATCH_SIZE
             batch_indices = indices[start_idx:end_idx]
             
             pieces = buffer_pieces[batch_indices]
@@ -275,13 +290,13 @@ def train():
                 n_total = nbr_p.shape[0]
                 nbr_vals = torch.zeros(n_total)
 
-                for start in range(0, n_total, inference_batch):
-                    end = min(start + inference_batch, n_total)
+                for start in range(0, n_total, INFERENCE_BATCH_SIZE):
+                    end = min(start + INFERENCE_BATCH_SIZE, n_total)
                     raw = pack_raw_state(nbr_p[start:end], nbr_o[start:end], device)
                     value, _ = target_model(raw)
                     nbr_vals[start:end] = value.squeeze(-1).cpu()
 
-                nbr_vals = nbr_vals.view(batch_size, 12)
+                nbr_vals = nbr_vals.view(BATCH_SIZE, 12)
 
             labels = compute_labels(pieces, orients, nbr_p, nbr_o, nbr_vals)
             labels_t = torch.from_numpy(labels).float().to(device)
@@ -314,6 +329,14 @@ def train():
                     f"label_mean {labels.mean():.2f} | solved {n_solved} | "
                     f"{dt:.2f}s/batch | avg {batch_avg:.2f}s"
                 )
+                if use_wandb:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/pred_mean": mean_pred,
+                        "train/label_mean": labels.mean(),
+                        "train/solved": n_solved,
+                        "epoch": epoch,
+                    }, step=global_step)
             # if batch_idx % 1 == 0:
                 # test_pkl_path = os.path.join(project_root, "test_data/cube3_test.pkl")
                 # test_model(model, buffer_pieces, buffer_orients, buffer_depths, test_pkl_path)
@@ -334,4 +357,9 @@ def train():
 
 
 if __name__ == "__main__":
-    train()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train RelCube")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
+    args = parser.parse_args()
+    
+    train(use_wandb=args.wandb)
