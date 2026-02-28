@@ -88,6 +88,33 @@ def get_piece_encoding(state: str) -> Tuple[np.ndarray, np.ndarray]:
                 break
     return pieces, orientations
 
+
+def get_facelet_from_pieces(pieces: np.ndarray, orients: np.ndarray) -> str:
+    state = list(SOLVED_STATE)
+    
+    for piece_id in range(20):
+        faces = CORNERS + EDGES
+        face_indices = faces[piece_id]
+        
+        color_idx = pieces[piece_id]
+        orient = orients[piece_id]
+        
+        if piece_id < 8:
+            corner_colors = ['U', 'R', 'F', 'D', 'B', 'L']
+            col_idx = color_idx % 6
+            base_color = corner_colors[col_idx]
+            if color_idx >= 6:
+                base_color = 'Y' if base_color in ['U', 'D'] else ('O' if base_color in ['R', 'L'] else 'G')
+        else:
+            edge_colors = ['U', 'R', 'F', 'D', 'B', 'L']
+            col_idx = (color_idx - 8) % 6
+            base_color = edge_colors[col_idx] if col_idx < 4 else ('O' if col_idx == 4 else 'G')
+        
+        for i, face_idx in enumerate(face_indices):
+            state[face_idx] = base_color
+    
+    return ''.join(state)
+
 def rotate_face(state: str, face: str, times: int = 1) -> str:
     start = FACE_START[face]
     state_list = list(state)

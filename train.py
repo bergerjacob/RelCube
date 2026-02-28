@@ -1,42 +1,32 @@
-"""
-RelCube training loop using Bellman-style value iteration with curriculum learning.
-
-For each batch of states:
-  1. Apply all 12 moves to get neighbor states (10k × 12 = 120k)
-  2. Forward pass all neighbors in one shot
-  3. Label: 0 if solved, else 1 + min(neighbor_values)
-  4. Train on the 10k (state, label) pairs
-"""
-
 import torch
 import torch.nn as nn
 import numpy as np
 import time
+import sys
+import os
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
 from model import RelCube
 from utils.cube_encoding import apply_move_to_encoding
 
 
-# All 12 quarter-turn moves
 ALL_MOVES = ["U", "U'", "D", "D'", "R", "R'", "L", "L'", "F", "F'", "B", "B'"]
 
 SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
 
-
 def pack_raw_state(edges, orients, device):
-    """Pack numpy pieces/orients into a (N, 2, 20) raw_state tensor."""
-    raw = np.stack([edges, orients], axis=1)  # (N, 2, 20)
+    raw = np.stack([edges, orients], axis=1)
     return torch.from_numpy(raw).long().to(device)
 
 
 def is_solved(pieces, orientations):
-    """Check if a state is the solved state."""
-    return np.array_equal(pieces, SOLVED_PIECES) and np.array_equal(orientations, SOLVED_ORIENTS)
+    p_solved = (pieces == SOLVED_PIECES).all(axis=-1)
+    o_solved = (orientations == SOLVED_ORIENTS).all(axis=-1)
+    return p_solved & o_solved
 
 
-# Replace with DataLoader
 def generate_scrambles(num_states, depth):
-    """Generate states by scrambling from solved to a given depth."""
     pieces_batch = np.zeros((num_states, 20), dtype=np.int32)
     orients_batch = np.zeros((num_states, 20), dtype=np.int32)
 
@@ -45,7 +35,6 @@ def generate_scrambles(num_states, depth):
         o = SOLVED_ORIENTS.copy()
         prev_face = None
         for _ in range(depth):
-            # avoid immediately undoing the last move
             while True:
                 move = ALL_MOVES[np.random.randint(12)]
                 if move[0] != prev_face:
@@ -59,17 +48,6 @@ def generate_scrambles(num_states, depth):
 
 
 def get_all_neighbors(pieces_batch, orients_batch):
-    """
-    Apply all 12 moves to each state.
-
-    Args:
-        pieces_batch: (N, 20)
-        orients_batch: (N, 20)
-
-    Returns:
-        neighbor_pieces: (N * 12, 20)
-        neighbor_orients: (N * 12, 20)
-    """
     n = pieces_batch.shape[0]
     all_p = np.zeros((n * 12, 20), dtype=np.int32)
     all_o = np.zeros((n * 12, 20), dtype=np.int32)
@@ -86,28 +64,88 @@ def get_all_neighbors(pieces_batch, orients_batch):
     return all_p, all_o
 
 
-def compute_labels(pieces_batch, orients_batch, neighbor_values):
-    """
-    Bellman labels: 0 if solved, else 1 + min(neighbor values).
+def compute_labels(pieces_batch, orients_batch, nbr_p, nbr_o, neighbor_values):
+    if torch.is_tensor(neighbor_values):
+        neighbor_values = neighbor_values.cpu().numpy()
 
-    Args:
-        pieces_batch: (N, 20)
-        orients_batch: (N, 20)
-        neighbor_values: (N, 12) - model predictions for each neighbor
-
-    Returns:
-        labels: (N,)
-    """
     n = pieces_batch.shape[0]
-    labels = np.zeros(n, dtype=np.float32)
 
-    for i in range(n):
-        if is_solved(pieces_batch[i], orients_batch[i]):
-            labels[i] = 0.0
-        else:
-            labels[i] = 1.0 + neighbor_values[i].min().item()
+    solved_nbr_mask = is_solved(nbr_p, nbr_o).reshape(n, 12)
+    neighbor_values[solved_nbr_mask] = 0.0
 
-    return labels
+    labels = 1.0 + neighbor_values.min(axis=1)
+
+    solved_parents_mask = is_solved(pieces_batch, orients_batch)
+    labels[solved_parents_mask] = 0.0
+
+    return labels.astype(np.float32)
+
+
+# def test_model(model, buffer_pieces, buffer_orients, buffer_depths, test_pkl_path=None):
+#     from utils.cube_facelet import apply_move, parse_moves, SOLVED_STATE, get_piece_encoding
+#
+#     num_test = 1000
+#
+#     if test_pkl_path and os.path.exists(test_pkl_path):
+#         import pickle
+#         with open(test_pkl_path, 'rb') as f:
+#             test_data = pickle.load(f)
+#         test_pieces = np.stack([s[0] for s in test_data['states']], axis=0)
+#         test_orients = np.stack([s[1] for s in test_data['states']], axis=0)
+#         test_depths = np.array(test_data['num_back_steps'])
+#         if len(test_pieces) < num_test:
+#             num_test = len(test_pieces)
+#         test_pieces = test_pieces[:num_test]
+#         test_orients = test_orients[:num_test]
+#         test_depths = test_depths[:num_test]
+#     else:
+#         test_indices = np.random.choice(len(buffer_pieces), num_test, replace=False)
+#
+#         test_pieces = buffer_pieces[test_indices]
+#         test_orients = buffer_orients[test_indices]
+#         test_depths = buffer_depths[test_indices]
+#
+#     state_list = []
+#     for i in range(num_test):
+#         state = SOLVED_STATE
+#         moves = []
+#         for j in range(int(test_depths[i])):
+#             move = ALL_MOVES[np.random.randint(12)]
+#             moves.append(move)
+#
+#         for m in moves:
+#             state = apply_move(state, m)
+#
+#         pieces, orients = get_piece_encoding(state)
+#         state_list.append((pieces, orients))
+#
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     model.eval()
+#
+#     predictions = []
+#     batch_size = 100
+#     for start in range(0, num_test, batch_size):
+#         end = min(start + batch_size, num_test)
+#
+#         batch_pieces = np.stack([state_list[i][0] for i in range(start, end)], axis=0)
+#         batch_orients = np.stack([state_list[i][1] for i in range(start, end)], axis=0)
+#         raw = pack_raw_state(batch_pieces, batch_orients, device)
+#
+#         with torch.no_grad():
+#             value, _ = model(raw)
+#             predictions.extend(value.squeeze(-1).cpu().numpy())
+#
+#     predictions = np.array(predictions)
+#
+#     print("\n--- Test Results ---")
+#     print(f"Number of test states: {num_test}")
+#     print(f"Min Depth: {test_depths.min()}, Max Depth: {test_depths.max()}")
+#     print(f"Predicted Values - Min: {predictions.min():.2f}, Max: {predictions.max():.2f}, Mean: {predictions.mean():.2f}")
+#     print(f"Label Mean: {test_depths.mean():.2f}")
+#
+#     depth_diff = np.abs(predictions - test_depths)
+#     print(f"MAE: {depth_diff.mean():.2f}, RMSE: {np.sqrt((depth_diff**2).mean()):.2f}")
+#     print("--------------------\n")
 
 
 def train():
@@ -121,48 +159,81 @@ def train():
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {param_count:,}")
 
-    # Curriculum: scramble depths and how many epochs at each depth
-    curriculum = [
-        (1, 200),
-        (2, 200),
-        (3, 200),
-        (4, 200),
-        (5, 200),
-        (6, 300),
-        (7, 300),
-        (8, 400),
-        (9, 400),
-        (10, 500),
-        (12, 500),
-        (14, 600),
-        (16, 600),
-        (18, 700),
-        (20, 800),
-    ]
-
     batch_size = 1000
-    inference_batch = 6000  # sub-batch for neighbor forward passes
+    buffer_size = 100000
+    inference_batch = 6000
 
     print(f"\nBatch size: {batch_size}")
-    print(f"Neighbors per batch: {batch_size * 12:,}")
-    print(f"Curriculum: {len(curriculum)} stages\n")
+    print(f"Buffer size: {buffer_size:,}")
+    print(f"Neighbors per batch: {batch_size * 12:,}\n")
 
+    buffer_pieces = None
+    buffer_orients = None
+    
     global_step = 0
-    for depth, num_epochs in curriculum:
-        print(f"{'='*60}")
-        print(f"Curriculum depth={depth}, epochs={num_epochs}")
-        print(f"{'='*60}")
+    epoch = 0
 
-        for epoch in range(num_epochs):
+    import copy
+    target_model = copy.deepcopy(model).to(device)
+    target_model.eval()
+    
+    while True:
+        epoch += 1
+        epoch_start = time.time()
+        
+        print(f"Epoch {epoch}: Generating buffer...")
+        gen_start = time.time()
+        
+        num_puzzles = 10000
+        all_pieces = []
+        all_orients = []
+        all_depths = []
+        
+        for cycle in range(max(1, buffer_size // (num_puzzles * 40))):
+            pieces_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
+            orients_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
+            
+            for i in range(num_puzzles):
+                pieces_batch[i] = SOLVED_PIECES.copy()
+                orients_batch[i] = SOLVED_ORIENTS.copy()
+            
+            for depth in range(1, 41):
+                for i in range(num_puzzles):
+                    p = pieces_batch[i].copy()
+                    o = orients_batch[i].copy()
+                    apply_move_to_encoding(ALL_MOVES[np.random.randint(12)], p, o)
+                    pieces_batch[i] = p
+                    orients_batch[i] = o
+                
+                all_pieces.append(pieces_batch.copy())
+                all_orients.append(orients_batch.copy())
+                all_depths.append(np.full(num_puzzles, depth, dtype=np.int32))
+        
+        buffer_pieces = np.concatenate(all_pieces, axis=0)
+        buffer_orients = np.concatenate(all_orients, axis=0)
+        buffer_depths = np.concatenate(all_depths, axis=0)
+        
+        gen_time = time.time() - gen_start
+        print(f"  Buffer generated in {gen_time:.1f}s with {len(buffer_pieces):,} states")
+        
+        indices = np.random.permutation(len(buffer_pieces))
+        num_batches = len(indices) // batch_size
+        print(f"  {num_batches} batches per epoch\n")
+        
+        batch_start = time.time()
+        
+        for batch_idx in range(num_batches):
             t0 = time.time()
-
-            # 1. Generate scrambled states at current depth
-            pieces, orients = generate_scrambles(batch_size, depth)
-
-            # 2. Get all 12 neighbors for each state
+            
+            start_idx = batch_idx * batch_size
+            end_idx = start_idx + batch_size
+            batch_indices = indices[start_idx:end_idx]
+            
+            pieces = buffer_pieces[batch_indices]
+            orients = buffer_orients[batch_indices]
+            
             nbr_p, nbr_o = get_all_neighbors(pieces, orients)
-
-            # 3. Inference on all neighbors (120k states) — no grad
+            
             model.eval()
             with torch.no_grad():
                 n_total = nbr_p.shape[0]
@@ -171,17 +242,14 @@ def train():
                 for start in range(0, n_total, inference_batch):
                     end = min(start + inference_batch, n_total)
                     raw = pack_raw_state(nbr_p[start:end], nbr_o[start:end], device)
-                    value, _ = model(raw)
+                    value, _ = target_model(raw)
                     nbr_vals[start:end] = value.squeeze(-1).cpu()
 
-                # Reshape to (N, 12)
                 nbr_vals = nbr_vals.view(batch_size, 12)
 
-            # 4. Compute Bellman labels
-            labels = compute_labels(pieces, orients, nbr_vals)
+            labels = compute_labels(pieces, orients, nbr_p, nbr_o, nbr_vals)
             labels_t = torch.from_numpy(labels).float().to(device)
-
-            # 5. Training pass
+            
             model.train()
             raw = pack_raw_state(pieces, orients, device)
             value, _ = model(raw)
@@ -190,35 +258,39 @@ def train():
             loss = loss_fn(preds, labels_t)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-
+            
             global_step += 1
             dt = time.time() - t0
-
-            if epoch % 20 == 0 or epoch == num_epochs - 1:
+            
+            if batch_idx % 10 == 0 or batch_idx == num_batches - 1:
+                mean_pred = preds.mean().item()
+                batch_avg = (time.time() - batch_start) / (batch_idx + 1)
+                
                 with torch.no_grad():
-                    mean_label = labels.mean()
-                    mean_pred = preds.mean().item()
                     solved_mask = labels == 0.0
-                    n_solved = solved_mask.sum()
+                    n_solved = int(solved_mask.sum())
 
                 print(
-                    f"  epoch {epoch:4d} | loss {loss.item():.4f} | "
-                    f"label_mean {mean_label:.2f} | pred_mean {mean_pred:.2f} | "
-                    f"solved_in_batch {n_solved} | {dt:.1f}s"
+                    f"  batch {batch_idx:5d}/{num_batches} | step {global_step:6d} | "
+                    f"loss {loss.item():.4f} | pred_mean {mean_pred:.2f} | "
+                    f"label_mean {labels.mean():.2f} | solved {n_solved} | "
+                    f"{dt:.2f}s/batch | avg {batch_avg:.2f}s"
                 )
+            if batch_idx % 10 == 0:
+                target_model.load_state_dict(model.state_dict())
+                # test_pkl_path = os.path.join(project_root, "test_data/cube3_test.pkl")
+                # test_model(model, buffer_pieces, buffer_orients, buffer_depths, test_pkl_path)
 
-        # Save checkpoint after each curriculum stage
-        ckpt_path = f"data/relcube_d{depth}.pt"
-        torch.save({
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "depth": depth,
-            "global_step": global_step,
-        }, ckpt_path)
-        print(f"  Saved {ckpt_path}\n")
+        
+        epoch_time = time.time() - epoch_start
+        print(f"\nEpoch {epoch} completed in {epoch_time:.1f}s\n")
+        
+        
+        buffer_pieces = None
+        buffer_orients = None
 
-    print("Training complete.")
 
 if __name__ == "__main__":
     train()
