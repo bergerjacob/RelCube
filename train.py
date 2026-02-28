@@ -159,9 +159,9 @@ def train():
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {param_count:,}")
 
-    batch_size = 1000
-    buffer_size = 100000
-    inference_batch = 6000
+    batch_size = 10000
+    buffer_size = 1000000
+    inference_batch = 120000
 
     print(f"\nBatch size: {batch_size}")
     print(f"Buffer size: {buffer_size:,}")
@@ -184,7 +184,7 @@ def train():
         print(f"Epoch {epoch}: Generating buffer...")
         gen_start = time.time()
         
-        num_puzzles = 10000
+        num_puzzles = buffer_size // 40
         all_pieces = []
         all_orients = []
         all_depths = []
@@ -278,8 +278,7 @@ def train():
                     f"label_mean {labels.mean():.2f} | solved {n_solved} | "
                     f"{dt:.2f}s/batch | avg {batch_avg:.2f}s"
                 )
-            if batch_idx % 10 == 0:
-                target_model.load_state_dict(model.state_dict())
+            # if batch_idx % 1 == 0:
                 # test_pkl_path = os.path.join(project_root, "test_data/cube3_test.pkl")
                 # test_model(model, buffer_pieces, buffer_orients, buffer_depths, test_pkl_path)
 
@@ -287,6 +286,7 @@ def train():
         epoch_time = time.time() - epoch_start
         print(f"\nEpoch {epoch} completed in {epoch_time:.1f}s\n")
         
+        target_model.load_state_dict(model.state_dict())
         
         buffer_pieces = None
         buffer_orients = None
