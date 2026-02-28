@@ -4,6 +4,7 @@ import numpy as np
 import time
 import sys
 import os
+import shutil
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 from model import RelCube
@@ -11,6 +12,9 @@ from utils.cube_encoding import apply_move_to_encoding
 
 
 ALL_MOVES = ["U", "U'", "D", "D'", "R", "R'", "L", "L'", "F", "F'", "B", "B'"]
+
+CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
+MILESTONE_INTERVAL = 10
 
 SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
@@ -79,6 +83,30 @@ def compute_labels(pieces_batch, orients_batch, nbr_p, nbr_o, neighbor_values):
     labels[solved_parents_mask] = 0.0
 
     return labels.astype(np.float32)
+
+
+def save_checkpoint(model, target_model, optimizer, epoch, global_step, latest_path, milestone_path=None):
+    os.makedirs(os.path.dirname(latest_path), exist_ok=True)
+    temp_path = latest_path + ".tmp"
+    checkpoint = {
+        "model_state": model.state_dict(),
+        "target_model_state": target_model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "epoch": epoch,
+        "global_step": global_step,
+    }
+    torch.save(checkpoint, temp_path)
+    shutil.move(temp_path, latest_path)
+    if milestone_path:
+        shutil.copy(latest_path, milestone_path)
+
+
+def load_checkpoint(model, target_model, optimizer, checkpoint_path):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(checkpoint["model_state"])
+    target_model.load_state_dict(checkpoint["target_model_state"])
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    return checkpoint["epoch"], checkpoint["global_step"]
 
 
 # def test_model(model, buffer_pieces, buffer_orients, buffer_depths, test_pkl_path=None):
@@ -176,6 +204,14 @@ def train():
     import copy
     target_model = copy.deepcopy(model).to(device)
     target_model.eval()
+
+    checkpoint_latest = os.path.join(CHECKPOINT_DIR, "checkpoint_latest.pt")
+    if os.path.exists(checkpoint_latest):
+        print(f"Resuming from checkpoint: {checkpoint_latest}")
+        epoch, global_step = load_checkpoint(model, target_model, optimizer, checkpoint_latest)
+        print(f"Resumed from epoch {epoch}, step {global_step}")
+    else:
+        print("Starting fresh training")
     
     while True:
         epoch += 1
@@ -287,6 +323,11 @@ def train():
         print(f"\nEpoch {epoch} completed in {epoch_time:.1f}s\n")
         
         target_model.load_state_dict(model.state_dict())
+        
+        milestone_path = None
+        if epoch % MILESTONE_INTERVAL == 0:
+            milestone_path = os.path.join(CHECKPOINT_DIR, f"checkpoint_epoch_{epoch}.pt")
+        save_checkpoint(model, target_model, optimizer, epoch, global_step, checkpoint_latest, milestone_path)
         
         buffer_pieces = None
         buffer_orients = None
