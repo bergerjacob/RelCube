@@ -44,14 +44,46 @@ def generate_scrambles(num_states, depth):
     for i in range(num_states):
         p = SOLVED_PIECES.copy()
         o = SOLVED_ORIENTS.copy()
-        prev_face = None
+        
+        prev_face = -1
+        prev_move_idx = -1
+        prev_axis = -1
+        consecutive_count = 0
+        
         for _ in range(depth):
             while True:
-                move = ALL_MOVES[np.random.randint(12)]
-                if move[0] != prev_face:
-                    break
-            prev_face = move[0]
-            apply_move_to_encoding(move, p, o)
+                move_idx = np.random.randint(12)
+                face = move_idx // 2
+                axis = face // 2
+
+                # 1. Direct Undo (e.g., U then U')
+                if face == prev_face and move_idx != prev_move_idx:
+                    continue # Blocked
+                
+                # 2. Triple Move (e.g., D D D)
+                if face == prev_face and move_idx == prev_move_idx:
+                    if consecutive_count == 2:
+                        continue # Blocked (would make 3)
+                
+                # 3. Parallel Commutativity & Sandwiches (e.g., D U, or R L R')
+                if axis == prev_axis and face < prev_face:
+                    continue # Blocked (forces U before D, R before L, F before B)
+                
+                # Move is valid
+                break
+            
+            # Update state tracking
+            if face == prev_face:
+                consecutive_count += 1
+            else:
+                consecutive_count = 1
+                
+            prev_face = face
+            prev_move_idx = move_idx
+            prev_axis = axis
+            
+            apply_move_to_encoding(ALL_MOVES[move_idx], p, o)
+            
         pieces_batch[i] = p
         orients_batch[i] = o
 
@@ -244,23 +276,11 @@ def train(use_wandb=False):
         all_depths = []
         
         for cycle in range(max(1, BUFFER_SIZE // (num_puzzles * MAX_DEPTH))):
-            pieces_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
-            orients_batch = np.zeros((num_puzzles, 20), dtype=np.int32)
-            
-            for i in range(num_puzzles):
-                pieces_batch[i] = SOLVED_PIECES.copy()
-                orients_batch[i] = SOLVED_ORIENTS.copy()
-            
             for depth in range(1, MAX_DEPTH + 1):
-                for i in range(num_puzzles):
-                    p = pieces_batch[i].copy()
-                    o = orients_batch[i].copy()
-                    apply_move_to_encoding(ALL_MOVES[np.random.randint(12)], p, o)
-                    pieces_batch[i] = p
-                    orients_batch[i] = o
+                pieces_batch, orients_batch = generate_scrambles(num_puzzles, depth)
                 
-                all_pieces.append(pieces_batch.copy())
-                all_orients.append(orients_batch.copy())
+                all_pieces.append(pieces_batch)
+                all_orients.append(orients_batch)
                 all_depths.append(np.full(num_puzzles, depth, dtype=np.int32))
         
         buffer_pieces = np.concatenate(all_pieces, axis=0)
