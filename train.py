@@ -189,12 +189,15 @@ def train(use_wandb=False):
             raise ValueError("Please set your project first! Run: export WANDB_PROJECT='relcube'")
             
         import wandb
-        wandb.init(config={
-            "learning_rate": LEARNING_RATE,
-            "batch_size": BATCH_SIZE,
-            "buffer_size": BUFFER_SIZE,
-            "inference_batch_size": INFERENCE_BATCH_SIZE,
-            "max_depth": MAX_DEPTH
+        wandb.init(
+            # id="dk8my6h6",         # Add your specific Run ID here
+            # resume="must",         # Tell it to resume
+            config={
+                "learning_rate": LEARNING_RATE,
+                "batch_size": BATCH_SIZE,
+                "buffer_size": BUFFER_SIZE,
+                "inference_batch_size": INFERENCE_BATCH_SIZE,
+                "max_depth": MAX_DEPTH
         })
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
