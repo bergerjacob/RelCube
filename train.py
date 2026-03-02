@@ -36,56 +36,60 @@ def is_solved(pieces, orientations):
     o_solved = (orientations == SOLVED_ORIENTS).all(axis=-1)
     return p_solved & o_solved
 
+# --- Precompute Valid Moves (Lookup Table) ---
+# State is defined by: (prev_move_idx, consecutive_count)
+VALID_MOVES_LUT = {}
+for prev_idx in range(-1, 12):
+    counts = [0] if prev_idx == -1 else [1, 2]
+    for count in counts:
+        prev_f = prev_idx // 2 if prev_idx != -1 else -1
+        prev_a = prev_f // 2 if prev_f != -1 else -1
+        
+        valid = []
+        for move_idx in range(12):
+            f = move_idx // 2
+            a = f // 2
+            
+            if f == prev_f and move_idx != prev_idx: continue
+            if f == prev_f and move_idx == prev_idx and count == 2: continue
+            if a == prev_a and f < prev_f: continue
+            
+            valid.append(move_idx)
+            
+        # Store as a tuple for fast indexing
+        VALID_MOVES_LUT[(prev_idx, count)] = tuple(valid)
 
-def generate_scrambles(num_states, depth):
-    pieces_batch = np.zeros((num_states, 20), dtype=np.int32)
-    orients_batch = np.zeros((num_states, 20), dtype=np.int32)
+
+def generate_scrambles(num_states, max_depth):
+    # Stores the entire trajectory: (num_states, max_depth, 20)
+    pieces_batch = np.zeros((num_states, max_depth, 20), dtype=np.int32)
+    orients_batch = np.zeros((num_states, max_depth, 20), dtype=np.int32)
+    
+    import random 
 
     for i in range(num_states):
         p = SOLVED_PIECES.copy()
         o = SOLVED_ORIENTS.copy()
         
-        prev_face = -1
         prev_move_idx = -1
-        prev_axis = -1
         consecutive_count = 0
         
-        for _ in range(depth):
-            while True:
-                move_idx = np.random.randint(12)
-                face = move_idx // 2
-                axis = face // 2
-
-                # 1. Direct Undo (e.g., U then U')
-                if face == prev_face and move_idx != prev_move_idx:
-                    continue # Blocked
-                
-                # 2. Triple Move (e.g., D D D)
-                if face == prev_face and move_idx == prev_move_idx:
-                    if consecutive_count == 2:
-                        continue # Blocked (would make 3)
-                
-                # 3. Parallel Commutativity & Sandwiches (e.g., D U, or R L R')
-                if axis == prev_axis and face < prev_face:
-                    continue # Blocked (forces U before D, R before L, F before B)
-                
-                # Move is valid
-                break
+        for d in range(max_depth):
+            valid_moves = VALID_MOVES_LUT[(prev_move_idx, consecutive_count)]
+            chosen_idx = random.choice(valid_moves)
             
-            # Update state tracking
-            if face == prev_face:
+            if (chosen_idx // 2) == (prev_move_idx // 2):
                 consecutive_count += 1
             else:
                 consecutive_count = 1
                 
-            prev_face = face
-            prev_move_idx = move_idx
-            prev_axis = axis
+            prev_move_idx = chosen_idx
             
-            apply_move_to_encoding(ALL_MOVES[move_idx], p, o)
+            apply_move_to_encoding(ALL_MOVES[chosen_idx], p, o)
             
-        pieces_batch[i] = p
-        orients_batch[i] = o
+            # Save the state at this depth
+            pieces_batch[i, d] = p
+            orients_batch[i, d] = o
 
     return pieces_batch, orients_batch
 
@@ -276,11 +280,12 @@ def train(use_wandb=False):
         all_depths = []
         
         for cycle in range(max(1, BUFFER_SIZE // (num_puzzles * MAX_DEPTH))):
+            pieces_traj, orients_traj = generate_scrambles(num_puzzles, MAX_DEPTH)
+            
             for depth in range(1, MAX_DEPTH + 1):
-                pieces_batch, orients_batch = generate_scrambles(num_puzzles, depth)
-                
-                all_pieces.append(pieces_batch)
-                all_orients.append(orients_batch)
+                # We simply pull the column corresponding to the depth we want
+                all_pieces.append(pieces_traj[:, depth - 1, :])
+                all_orients.append(orients_traj[:, depth - 1, :])
                 all_depths.append(np.full(num_puzzles, depth, dtype=np.int32))
         
         buffer_pieces = np.concatenate(all_pieces, axis=0)
