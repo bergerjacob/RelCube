@@ -1,56 +1,51 @@
 """
 Rubik's Cube Move to Piece-Based Encoding Converter
-Piece ID and orientation only - no facelet manipulation.
+Vectorized Torch Implementation - HPC Ready.
 """
 
 import argparse
 import sys
+import torch
 from typing import List, Tuple
 import numpy as np
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# MOVE_INFO: face -> (corner_cycle, edge_cycle)
-# Cycle lists show slots in clockwise order: slot[i] receives from slot[(i-1)%4]
-MOVE_INFO = {
-    'U': ([0, 1, 2, 3], [8, 9, 10, 11]),
-    'D': ([7, 6, 5, 4], [15, 14, 13, 12]),
-    'L': ([1, 5, 6, 2], [10, 17, 14, 18]),
-    'R': ([0, 3, 7, 4], [8, 19, 12, 16]),
-    'F': ([0, 4, 5, 1], [9, 16, 13, 17]),
-    'B': ([2, 6, 7, 3], [11, 18, 15, 19]),
-}
-
-# ADJUST: face -> (corner_adjust, edge_adjust)
-# corner_adjust: {from_slot: orient_delta} or None
-# edge_adjust: {from_slot: orient_delta} or None
-ADJUST = {
-    'U': (None, None),
-    'D': (None, None),
-    'L': ({1: -1, 5: 1, 6: -1, 2: 1}, None),
-    'R': ({0: 1, 3: -1, 7: 1, 4: -1}, None),
-    'F': ({0: -1, 4: 1, 5: -1, 1: 1}, {9: 1, 16: 1, 13: 1, 17: 1}),
-    'B': ({3: 1, 2: -1, 6: 1, 7: -1}, {11: 1, 18: 1, 15: 1, 19: 1}),
+# Define these globally so apply_move_to_encoding can access them instantly
+MOVE_DATA = {
+    'U': (torch.tensor([3, 0, 1, 2, 4, 5, 6, 7, 11, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19], device=device),
+          torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device=device)),
+    'D': (torch.tensor([0, 1, 2, 3, 5, 6, 7, 4, 8, 9, 10, 11, 13, 14, 15, 12, 16, 17, 18, 19], device=device),
+          torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device=device)),
+    'L': (torch.tensor([0, 5, 1, 3, 4, 6, 2, 7, 8, 9, 18, 11, 12, 13, 17, 15, 16, 10, 14, 19], device=device),
+          torch.tensor([0, 1, 2, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device=device)),
+    'R': (torch.tensor([4, 1, 2, 0, 7, 5, 6, 3, 16, 9, 10, 11, 19, 13, 14, 15, 12, 17, 18, 8], device=device),
+          torch.tensor([1, 0, 0, 2, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], device=device)),
+    'F': (torch.tensor([1, 4, 2, 3, 5, 0, 6, 7, 8, 17, 10, 11, 12, 16, 14, 15, 9, 13, 18, 19], device=device),
+          torch.tensor([1, 2, 0, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0], device=device)),
+    'B': (torch.tensor([0, 1, 3, 7, 4, 5, 2, 6, 8, 9, 10, 19, 12, 13, 14, 18, 16, 17, 11, 15], device=device),
+          torch.tensor([0, 0, 1, 2, 0, 0, 2, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1], device=device)),
 }
 
 
 def get_piece_encoding_from_moves(moves_str: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Generate piece encoding after applying moves from solved state."""
-    pieces = np.arange(20, dtype=np.int32)
-    orientations = np.zeros(20, dtype=np.int32)
+    """Generate piece encoding using Torch but returning NumPy for compatibility."""
+    # Start on the GPU/CPU device
+    pieces = torch.arange(20, device=device)
+    orientations = torch.zeros(20, dtype=torch.long, device=device)
     
     move_list = parse_moves(moves_str)
     
     for move in move_list:
-        apply_move_to_encoding(move, pieces, orientations)
+        pieces, orientations = apply_move_to_encoding(move, pieces, orientations)
     
-    return pieces, orientations
-
+    # Convert back to NumPy for the rest of the script (printing/saving)
+    return pieces.cpu().numpy(), orientations.cpu().numpy()
 
 def parse_moves(moves_str: str) -> List[str]:
     """Parse move string into list of moves."""
     valid = 'URFDLB'
-    moves = []
-    i = 0
+    moves, i = [], 0
     while i < len(moves_str):
         if moves_str[i] in valid:
             m = moves_str[i]
@@ -60,51 +55,34 @@ def parse_moves(moves_str: str) -> List[str]:
             moves.append(m)
         i += 1
     return moves
+    return moves
 
 
 def apply_move_to_encoding(move: str, 
-                           pieces: np.ndarray, 
-                           orientations: np.ndarray) -> None:
-    """Apply a move to the piece encoding in-place."""
+                           pieces: torch.Tensor, 
+                           orientations: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Vectorized version of move application.
+    Note: Returns new tensors because indexing creates copies.
+    """
     face = move[0]
     times = 1
-    
     if len(move) > 1:
-        if move[1] == "'": 
-            times = 3
-        elif move[1] == '2': 
-            times = 2
+        if move[1] == "'": times = 3
+        elif move[1] == '2': times = 2
     
-    corner_cycle, edge_cycle = MOVE_INFO[face]
-    corner_adjust, edge_adjust = ADJUST[face]
+    perm, delta = MOVE_DATA[face]
     
     for _ in range(times):
-        _cycle_items(corner_cycle, pieces, orientations, corner_adjust, 3)
-        _cycle_items(edge_cycle, pieces, orientations, edge_adjust, 2)
-
-
-def _cycle_items(cycle: List[int], 
-                 pieces: np.ndarray, 
-                 orientations: np.ndarray,
-                 adjust: dict,
-                 mod: int) -> None:
-    """Cycle items (corners or edges) with orientation adjustments."""
-    saved_pieces = [pieces[s] for s in cycle]
-    saved_orients = [orientations[s] for s in cycle]
-    
-    for i in range(len(cycle)):
-        to_slot = cycle[i]
-        from_idx = (i - 1) % len(cycle)
+        # The core vectorized logic:
+        pieces = pieces[perm]
         
-        pieces[to_slot] = saved_pieces[from_idx]
+        # Orientations move slots AND change values
+        orientations = orientations[perm] + delta
+        orientations[:8] %= 3  # Corner modulo
+        orientations[8:] %= 2  # Edge modulo
         
-        new_orient = saved_orients[from_idx]
-        
-        if adjust is not None and cycle[from_idx] in adjust:
-            delta = adjust[cycle[from_idx]]
-            new_orient = (new_orient + delta) % mod
-        
-        orientations[to_slot] = new_orient
+    return pieces, orientations
 
 
 def main():
@@ -135,7 +113,6 @@ def main():
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
