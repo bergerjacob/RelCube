@@ -109,7 +109,7 @@ def get_all_neighbors(pieces_batch, orients_batch):
         for j, move in enumerate(ALL_MOVES):
             p = pieces_batch[i].copy()
             o = orients_batch[i].copy()
-            apply_move_to_encoding(move, p, o)
+            p, o = apply_move_to_encoding(move, p, o)
             idx = i * 12 + j
             all_p[idx] = p
             all_o[idx] = o
@@ -188,7 +188,7 @@ def test_model_live(model, data_path, num_test, device, global_step, wandb_logge
                 consecutive_count = 1
 
             prev_move_idx = chosen_idx
-            apply_move_to_encoding(ALL_MOVES[chosen_idx], p, o)
+            p, o = apply_move_to_encoding(ALL_MOVES[chosen_idx], p, o)
 
         test_pieces.append(p)
         test_orients.append(o)
