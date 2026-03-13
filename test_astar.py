@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-A* Test Script for RelCube Model (DeepCubeA-style)
-Replicates DeepCubeA testing protocol with our NPZ data format.
+Beam Search Test for RelCube Model
+Uses wide beam to explore multiple paths in parallel.
 
 Usage:
-    python test_astar.py --npz data_0/data_0.npz --checkpoint checkpoints/checkpoint_latest.pt --num_test 100
+    python test_astar.py --checkpoint checkpoints/checkpoint_latest.pt --num_test 5 --beam_width 100
 """
 
 import torch
 import numpy as np
 import argparse
 import time
-import heapq
 import os
 import sys
 
@@ -25,155 +24,185 @@ SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
 
 
-def pack_raw_state(edges, orients, device):
-    edges = np.asarray(edges)
-    orients = np.asarray(orients)
-    if edges.ndim == 1:
-        edges = edges[np.newaxis, :]
-        orients = orients[np.newaxis, :]
-    raw = np.stack([edges, orients], axis=1)
-    return torch.from_numpy(raw).long().to(device)
-
-
 def is_solved(p, o):
     return np.array_equal(p, SOLVED_PIECES) and np.array_equal(o, SOLVED_ORIENTS)
 
 
-def solve_astar(model, start_p, start_o, device, weight=1.0, max_nodes=100000):
-    """Weighted A* search following DeepCubeA protocol."""
+def solve_beam_search(
+    model, start_p, start_o, expected, device, beam_width=100, max_depth=30
+):
+    """Wide beam search - keep top beam_width states at each depth."""
     start_time = time.time()
-    h_start = 0.0
-    
+
     if is_solved(start_p, start_o):
-        return True, 0, 0, time.time() - start_time, [], h_start
+        return {
+            "solved": True,
+            "solution_len": 0,
+            "nodes": 0,
+            "time": 0,
+            "expected": expected,
+        }
 
-    raw_start = pack_raw_state(np.expand_dims(start_p, 0), np.expand_dims(start_o, 0), device)
-    with torch.no_grad():
-        start_val, _ = model(raw_start)
-        h_start = start_val.item()
+    # Initialize beam with starting state
+    # Each entry: (pieces, orients, path)
+    beam = [(start_p.copy(), start_o.copy(), [])]
+    visited = {tuple(start_p.tolist()) + tuple(start_o.tolist())}
+    total_nodes = 0
 
-    counter = 0
-    open_set = []
-    heapq.heappush(open_set, (weight * 0 + h_start, counter, 0, start_p.copy(), start_o.copy(), []))
-    
-    start_hash = tuple(start_p.tolist()) + tuple(start_o.tolist())
-    closed_dict = {start_hash: 0}
-    nodes_expanded = 0
+    for depth in range(max_depth):
+        if not beam:
+            break
 
-    while open_set and nodes_expanded < max_nodes:
-        _, _, g, current_p, current_o, path = heapq.heappop(open_set)
-        nodes_expanded += 1
+        # Generate all neighbors
+        all_nbr_p = []
+        all_nbr_o = []
+        all_path = []
 
-        nbr_p = np.zeros((12, 20), dtype=np.int32)
-        nbr_o = np.zeros((12, 20), dtype=np.int32)
-        
-        for i, move in enumerate(ALL_MOVES):
-            p_copy = torch.from_numpy(current_p).to(device)
-            o_copy = torch.from_numpy(current_o).to(device)
-            p_copy, o_copy = apply_move_to_encoding(move, p_copy, o_copy)
-            nbr_p[i] = p_copy.cpu().numpy()
-            nbr_o[i] = o_copy.cpu().numpy()
+        for p, o, path in beam:
+            for move in ALL_MOVES:
+                p_t = torch.from_numpy(p).to(device)
+                o_t = torch.from_numpy(o).to(device)
+                p_t, o_t = apply_move_to_encoding(move, p_t, o_t)
+                p_n = p_t.cpu().numpy()
+                o_n = o_t.cpu().numpy()
 
-        for i, move in enumerate(ALL_MOVES):
-            if is_solved(nbr_p[i], nbr_o[i]):
-                solve_time = time.time() - start_time
-                return True, len(path) + 1, nodes_expanded, solve_time, path + [move], h_start
+                # Check if solved immediately
+                if is_solved(p_n, o_n):
+                    return {
+                        "solved": True,
+                        "solution_len": len(path) + 1,
+                        "nodes": total_nodes,
+                        "time": time.time() - start_time,
+                        "expected": expected,
+                    }
 
-        raw = pack_raw_state(nbr_p, nbr_o, device)
+                state_key = tuple(p_n.tolist()) + tuple(o_n.tolist())
+                if state_key not in visited:
+                    visited.add(state_key)
+                    all_nbr_p.append(p_n)
+                    all_nbr_o.append(o_n)
+                    all_path.append(path + [move])
+
+        if not all_nbr_p:
+            break
+
+        total_nodes += len(all_nbr_p)
+
+        # Batch inference for all neighbors
+        raw = np.stack([all_nbr_p, all_nbr_o], axis=1)
+        raw_torch = torch.from_numpy(raw).long().to(device)
+
         with torch.no_grad():
-            values, _ = model(raw)
-            values = values.squeeze(-1).cpu().numpy()
+            h_values = model(raw_torch)[0].squeeze(-1).cpu().numpy()
 
-        for i, move in enumerate(ALL_MOVES):
-            p_next = nbr_p[i]
-            o_next = nbr_o[i]
-            state_hash = tuple(p_next.tolist()) + tuple(o_next.tolist())
-            
-            tentative_g = g + 1
-            
-            if state_hash not in closed_dict or tentative_g < closed_dict[state_hash]:
-                closed_dict[state_hash] = tentative_g
-                h = values[i]
-                f = weight * tentative_g + h
-                
-                counter += 1
-                new_path = path + [(move, h)]
-                heapq.heappush(open_set, (f, counter, tentative_g, p_next, o_next, new_path))
+        # Sort by heuristic and keep top beam_width
+        sorted_indices = np.argsort(h_values)
+        beam = []
+        for idx in sorted_indices[:beam_width]:
+            beam.append((all_nbr_p[idx], all_nbr_o[idx], all_path[idx]))
 
-    solve_time = time.time() - start_time
-    return False, nodes_expanded, nodes_expanded, solve_time, [], h_start
+    return {
+        "solved": False,
+        "solution_len": -1,
+        "nodes": total_nodes,
+        "time": time.time() - start_time,
+        "expected": expected,
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="A* test for RelCube model (DeepCubeA-style)")
-    parser.add_argument('--npz', type=str, default='data_0/data_0.npz', help='NPZ file')
-    parser.add_argument('--checkpoint', type=str, default='checkpoints/checkpoint_latest.pt', help='Checkpoint')
-    parser.add_argument('--num_test', type=int, default=100, help='Number of states')
-    parser.add_argument('--weight', type=float, default=1.0, help='Weight for path cost (1.0 = A*)')
-    parser.add_argument('--max_nodes', type=int, default=100000, help='Max nodes per state')
-    
+    parser = argparse.ArgumentParser(description="Beam search test for RelCube")
+    parser.add_argument(
+        "--checkpoint", type=str, default="checkpoints/checkpoint_latest.pt"
+    )
+    parser.add_argument("--num_test", type=int, default=5)
+    parser.add_argument("--beam_width", type=int, default=100)
+    parser.add_argument("--max_depth", type=int, default=30)
+
     args = parser.parse_args()
-    
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    
+
+    # Load model
     model = RelCube().to(device)
+    model.eval()
+
     if not os.path.exists(args.checkpoint):
         print(f"Error: Checkpoint not found at {args.checkpoint}")
         return
-    
+
     print(f"Loading: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state"])
-    model.eval()
-    
-    print(f"Loading: {args.npz}")
-    data = np.load(args.npz, allow_pickle=True)
-    
-    pieces = data['pieces']
-    orientations = data['orientations']
-    solution_lengths = data['solution_lengths']
-    
-    total = min(args.num_test, len(pieces))
-    
-    print(f"\n{'='*70}")
-    print(f"A* Test: {total} states (weight={args.weight}, max_nodes={args.max_nodes})")
-    print(f"{'='*70}")
-    
-    results = {'solved': [], 'sol_costs': [], 'nodes': [], 'times': [], 'expected': []}
-    
+
+    # Load test data
+    data_path = "data_0/data_0.npz"
+    print(f"Loading: {data_path}")
+    data = np.load(data_path, allow_pickle=True)
+
+    pieces = data["pieces"][: args.num_test]
+    orientations = data["orientations"][: args.num_test]
+    solution_lengths = data["solution_lengths"][: args.num_test]
+
+    total = len(pieces)
+
+    print(f"\n{'=' * 80}")
+    print(
+        f"Beam Search Test: {total} states (beam_width={args.beam_width}, max_depth={args.max_depth})"
+    )
+    print(f"{'=' * 80}\n")
+
+    # Process all states
+    total_start = time.time()
+    results = []
+
     for i in range(total):
-        p, o = pieces[i], orientations[i]
-        expected = int(solution_lengths[i])
-        
-        solved, sol_len, nodes, t, path, _ = solve_astar(model, p, o, device, args.weight, args.max_nodes)
-        
-        results['solved'].append(solved)
-        results['sol_costs'].append(sol_len if solved else -1)
-        results['nodes'].append(nodes)
-        results['times'].append(t)
-        results['expected'].append(expected)
-        
-        status = "OK" if solved and sol_len <= expected else ("SUBOPT" if solved else "FAIL")
-        got = str(sol_len) if solved else "FAIL"
-        print(f"State {i+1:4d}: Exp={expected:2d} | Got={got:>5s} | Nodes={nodes:7d} | Time={t:6.2f}s | {status}")
-    
-    solved_count = sum(results['solved'])
-    optimal_count = sum(1 for s, c, e in zip(results['solved'], results['sol_costs'], results['expected']) if s and c <= e)
-    
-    avg_nodes = np.mean([n for s, n in zip(results['solved'], results['nodes']) if s])
-    avg_time = np.mean([t for s, t in zip(results['solved'], results['times']) if s])
-    
-    print(f"\n{'='*70}")
-    print(f"SUMMARY")
-    print(f"{'='*70}")
-    print(f"Total:           {total}")
-    print(f"Solved:          {solved_count} ({100*solved_count/total:.1f}%)")
-    print(f"Optimal:         {optimal_count} ({100*optimal_count/total:.1f}%)")
-    if solved_count > 0:
-        print(f"Avg nodes:       {avg_nodes:.0f}")
-        print(f"Avg time:        {avg_time:.2f}s")
-    print(f"{'='*70}")
+        result = solve_beam_search(
+            model,
+            pieces[i],
+            orientations[i],
+            int(solution_lengths[i]),
+            device,
+            args.beam_width,
+            args.max_depth,
+        )
+        results.append(result)
+
+        status = (
+            "OK"
+            if result["solved"] and result["solution_len"] <= result["expected"]
+            else ("SUBOPT" if result["solved"] else "FAIL")
+        )
+        sol_len = result["solution_len"] if result["solved"] else "FAIL"
+        print(
+            f"State {i + 1:3d}: Exp={result['expected']:2d} | Got={sol_len:>5s} | "
+            f"Nodes={result['nodes']:7d} | Time={result['time']:.2f}s | {status}"
+        )
+
+    total_time = time.time() - total_start
+
+    # Analyze results
+    solved_count = sum(1 for r in results if r["solved"])
+    optimal_count = sum(
+        1 for r in results if r["solved"] and r["solution_len"] <= r["expected"]
+    )
+
+    solved_results = [r for r in results if r["solved"]]
+    avg_nodes = np.mean([r["nodes"] for r in solved_results]) if solved_results else 0
+    avg_time = np.mean([r["time"] for r in solved_results]) if solved_results else 0
+
+    print(f"\n{'=' * 80}")
+    print(f"FINAL RESULTS")
+    print(f"{'=' * 80}")
+    print(f"Total states:         {total}")
+    print(f"Solved:               {solved_count} ({100 * solved_count / total:.1f}%)")
+    print(f"Optimal solutions:    {optimal_count} ({100 * optimal_count / total:.1f}%)")
+    if solved_results:
+        print(f"Avg nodes expanded:   {avg_nodes:.0f}")
+        print(f"Avg solve time:       {avg_time:.2f}s")
+    print(f"Total time:           {total_time:.2f}s ({total_time / total:.2f}s/state)")
+    print(f"{'=' * 80}")
 
 
 if __name__ == "__main__":
