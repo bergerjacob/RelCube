@@ -22,7 +22,7 @@ LEARNING_RATE = 1e-4
 BATCH_SIZE = 10000
 BUFFER_SIZE = 1000000
 INFERENCE_BATCH_SIZE = 120000
-MAX_DEPTH = 40  # Used for buffer generation
+MAX_DEPTH = 100  # Used for buffer generation
 
 SOLVED_PIECES = np.arange(20, dtype=np.int32)
 SOLVED_ORIENTS = np.zeros(20, dtype=np.int32)
@@ -248,8 +248,8 @@ def train(use_wandb=False):
         import wandb
 
         wandb.init(
-            #             id="43uvgw9t",         # Add your specific Run ID here
-            #             resume="must",         # Tell it to resume
+                        id="cqth3viu",         # Add your specific Run ID here
+                        resume="must",         # Tell it to resume
             config={
                 "learning_rate": LEARNING_RATE,
                 "batch_size": BATCH_SIZE,
