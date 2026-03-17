@@ -161,48 +161,28 @@ def load_checkpoint(model, target_model, optimizer, checkpoint_path):
 
 
 def test_model_live(model, data_path, num_test, device, global_step, wandb_logger=None):
-    """Live testing during training - logs to wandb."""
-    import random
-
+    """Live testing during training on real dataset - logs to wandb."""
     model.eval()
 
-    # Generate random test states
-    test_pieces = []
-    test_orients = []
-    test_depths = []
+    if not os.path.exists(data_path):
+        print(f"\nWarning: Test data not found at {data_path}. Skipping real test.")
+        model.train()
+        return {}
 
-    for _ in range(num_test):
-        depth = random.randint(5, MAX_DEPTH)
-        p = SOLVED_PIECES.copy()
-        o = SOLVED_ORIENTS.copy()
-        prev_move_idx = -1
-        consecutive_count = 0
-
-        for _ in range(depth):
-            valid_moves = VALID_MOVES_LUT[(prev_move_idx, consecutive_count)]
-            chosen_idx = random.choice(valid_moves)
-
-            if (chosen_idx // 2) == (prev_move_idx // 2):
-                consecutive_count += 1
-            else:
-                consecutive_count = 1
-
-            prev_move_idx = chosen_idx
-            p, o = apply_move_to_encoding(ALL_MOVES[chosen_idx], p, o)
-
-        test_pieces.append(p)
-        test_orients.append(o)
-        test_depths.append(depth)
-
-    test_pieces = np.array(test_pieces)
-    test_orients = np.array(test_orients)
-    test_depths = np.array(test_depths)
+    # Load real pre-computed data
+    data = np.load(data_path, allow_pickle=True)
+    
+    # Safely slice up to num_test (in case the dataset is smaller than num_test)
+    actual_num_test = min(num_test, len(data['pieces']))
+    test_pieces = data['pieces'][:actual_num_test]
+    test_orients = data['orientations'][:actual_num_test]
+    test_depths = data['solution_lengths'][:actual_num_test]
 
     # Batched inference
     batch_size = 256
     predictions = []
-    for i in range(0, num_test, batch_size):
-        end = min(i + batch_size, num_test)
+    for i in range(0, actual_num_test, batch_size):
+        end = min(i + batch_size, actual_num_test)
         raw = pack_raw_state(test_pieces[i:end], test_orients[i:end], device)
         with torch.no_grad():
             preds = model(raw)[0].squeeze(-1).cpu().numpy()
@@ -216,19 +196,20 @@ def test_model_live(model, data_path, num_test, device, global_step, wandb_logge
     corr = (
         np.corrcoef(predictions, test_depths)[0, 1]
         if len(np.unique(test_depths)) > 1
-        else 0
+        else 0.0
     )
 
     metrics = {
-        "test/pred_mean": float(predictions.mean()),
-        "test/depth_mean": float(test_depths.mean()),
-        "test/mae": float(mae),
-        "test/rmse": float(rmse),
-        "test/corr": float(corr),
+        "real-test/pred_mean": float(predictions.mean()),
+        "real-test/depth_mean": float(test_depths.mean()),
+        "real-test/mae": float(mae),
+        "real-test/rmse": float(rmse),
+        "real-test/corr": float(corr),
     }
 
     print(
-        f"\n  Test @ step {global_step}: MAE={mae:.2f}, RMSE={rmse:.2f}, corr={corr:.3f}"
+        f"\n  Real Data Test @ step {global_step} ({actual_num_test} states): "
+        f"MAE={mae:.2f}, RMSE={rmse:.2f}, corr={corr:.3f}"
     )
 
     if wandb_logger:
