@@ -91,7 +91,7 @@ class EmbeddingLayer(nn.Module):
 class TransformerBlock(nn.Module):
     """Single Transformer Encoder Block."""
 
-    def __init__(self, d_model=256, nhead=8, dim_feedforward=1024):
+    def __init__(self, d_model=512, nhead=16, dim_feedforward=2048):
         super().__init__()
 
         self.self_attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
@@ -115,7 +115,7 @@ class TransformerBlock(nn.Module):
 class TransformerBlocks(nn.Module):
     """Multiple Transformer Encoder Blocks."""
 
-    def __init__(self, num_layers=8, d_model=256, nhead=8, dim_feedforward=1024):
+    def __init__(self, num_layers=12, d_model=512, nhead=16, dim_feedforward=2048):
         super().__init__()
 
         self.layers = nn.ModuleList(
@@ -137,7 +137,7 @@ class ValueHead(nn.Module):
     Takes the CLS token which has aggregated global context from all pieces.
     """
 
-    def __init__(self, d_model=256):
+    def __init__(self, d_model=512):
         super().__init__()
 
         self.fc1 = nn.Linear(d_model, 128)
@@ -161,7 +161,7 @@ class PolicyHead(nn.Module):
     Uses the 20 piece tokens (excluding CLS) to predict move probabilities.
     """
 
-    def __init__(self, d_model=256, num_tokens=20, num_moves=12):
+    def __init__(self, d_model=512, num_tokens=20, num_moves=12):
         super().__init__()
 
         self.fc1 = nn.Linear(d_model * num_tokens, 256)
@@ -183,7 +183,7 @@ class PolicyHead(nn.Module):
 class RelCube(nn.Module):
     """Main RelCube model for Rubik's Cube state evaluation."""
 
-    def __init__(self, encoder=None, d_model=256):
+    def __init__(self, encoder=None, d_model=512):
         super().__init__()
 
         self.encoder = encoder or CubeEncoder()
