@@ -27,7 +27,7 @@ class CubeEncoder(nn.Module):
 class EmbeddingLayer(nn.Module):
     """Embedding layer with deterministic slicing and parallel lookup tables."""
 
-    def __init__(self):
+    def __init__(self, d_model=512):
         super().__init__()
 
         self.corner_slot_emb = nn.Embedding(8, 42)
@@ -38,7 +38,7 @@ class EmbeddingLayer(nn.Module):
         self.edge_piece_emb = nn.Embedding(12, 42)
         self.edge_orient_emb = nn.Embedding(2, 44)
 
-        self.proj = nn.Linear(128, 256)
+        self.proj = nn.Linear(128, d_model)
 
     def forward(self, piece_ids, orientations):
         """
@@ -187,10 +187,10 @@ class RelCube(nn.Module):
         super().__init__()
 
         self.encoder = encoder or CubeEncoder()
-        self.embedding = EmbeddingLayer()
-        self.transformer = TransformerBlocks()
-        self.value_head = ValueHead(d_model)
-        self.policy_head = PolicyHead(d_model)
+        self.embedding = EmbeddingLayer(d_model=512)
+        self.transformer = TransformerBlocks(d_model=512)
+        self.value_head = ValueHead(d_model=512)
+        # self.policy_head = PolicyHead(d_model)
 
         # CLS token for global state aggregation
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
@@ -222,8 +222,9 @@ class RelCube(nn.Module):
         cls_output = transformed[:, 0]
         value = self.value_head(cls_output)
 
-        # Policy uses the remaining tokens (excluding CLS)
-        policy_tokens = transformed[:, 1:]
-        policy = self.policy_head(policy_tokens)
+        # # Policy uses the remaining tokens (excluding CLS)
+        # policy_tokens = transformed[:, 1:]
+        # policy = self.policy_head(policy_tokens)
+        policy = None
 
         return value, policy
